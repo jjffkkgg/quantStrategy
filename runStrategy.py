@@ -18,6 +18,7 @@ from strategies.adjDualMomentum import dual_momentum_signal
 from strategies.laaDm import laa_dm_signal
 from strategies.laaMA import laa_ma_signal
 from strategies.laaMA2 import laa_ma2_signal
+from strategies.laaMA2F import laa_ma2f_signal
 from strategies.dm_rp import dm_rp_signal
 
 def print_weight_result(name: str, result):
@@ -107,6 +108,12 @@ def main():
     except Exception as e:
         laa_ma2 = f"Error: {e}"
 
+    # ---------- LAA_MA2_F (QQQ + IWD MA 기반 LAA, 30일 거래제한) ----------
+    try:
+        laa_ma2_f = laa_ma2f_signal(prices, verbose=True)
+    except Exception as e:
+        laa_ma2_f = f"Error: {e}"
+
     # ---------- DM_RP (Dual Momentum + Risk Parity) ----------
     try:
         dm_rp = dm_rp_signal(prices, verbose=True)
@@ -121,6 +128,7 @@ def main():
     print_weight_result("LAA_DM", laa_dm)
     print_weight_result("LAA_MA", laa_ma)
     print_weight_result("LAA_MA2", laa_ma2)
+    print_weight_result("LAA_MA2_F", laa_ma2_f)
     print_weight_result("DM_RP", dm_rp)
 
 
