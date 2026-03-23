@@ -16,6 +16,9 @@
 - LAA_DM  : 듀얼모멘텀을 리스크온/오프 스위치로 사용하는 LAA 변형
 - LAA_MA  : 실업률 대신 QQQ MA 로 리스크온/오프를 결정하는 LAA 변형
 - LAA_MA2 : QQQ + IWD MA 로 리스크온/오프를 결정하는 LAA 변형
+- LAA_MA2F : QQQ + IWD MA 로 리스크온/오프를 결정하는 LAA 변형 (재진입 쿨다운 30일 적용)
+- LAA_MA3 : LAA_MA2F에서 IWD 매도/재진입 로직을 매월에서 매일/3일연속으로 체크하는 버전
+- LAA_MA4 : LAA_MA2F에서 IAU 매매 전략을 추가한 버전 (1년 수익률 기반)
 - DM_RP   : 듀얼모멘텀 + 리스크패리티 오버레이 전략
 """
 
@@ -37,7 +40,9 @@ from strategies.laaDm import get_weights as laa_dm_get_weights
 from strategies.laaMA import get_weights as laa_ma_get_weights
 from strategies.laaMA2 import get_weights as laa_ma2_get_weights
 from strategies.dm_rp import get_weights as dm_rp_get_weights
+from strategies.laaMA3 import get_weights as laa_ma3_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
+from strategies.laaMA4 import get_weights as laa_ma4_get_weights
 
 
 # ----------------------------------------------------------------------
@@ -80,6 +85,12 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
     if name == "LAA_MA2F":
+        return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
+    
+    if name == "LAA_MA3":
+        return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
+    
+    if name == "LAA_MA4":
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
     if name == "DM_RP":
@@ -344,6 +355,12 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     if name == "LAA_MA2F":
         return laa_ma2f_get_weights(price_df)
     
+    if name == "LAA_MA3":
+        return laa_ma3_get_weights(price_df)
+    
+    if name == "LAA_MA4":
+        return laa_ma4_get_weights(price_df)
+    
     if name == "DM_RP":
         return dm_rp_get_weights(price_df)
 
@@ -365,8 +382,10 @@ def main():
         print("       python runBacktest.py DM")
         print("       python runBacktest.py LAA_DM")
         print("       python runBacktest.py LAA_MA")
+        print("       python runBacktest.py LAA_MA3")
+        print("       python runBacktest.py LAA_MA4")
         sys.exit(1)
-
+        
     strategy_name = sys.argv[1].upper()
     print(f"[INFO] 선택한 전략: {strategy_name}")
 
