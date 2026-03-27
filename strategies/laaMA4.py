@@ -159,17 +159,16 @@ def _laa_ma4_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     # ------------------------------
     # 3-3) IAU 1년 수익률 기반 ON/OFF (신규 로직)
     # ------------------------------
-    monthly_idx = prices.resample("ME").last().index
-
-    ret_iau_1y = prices["IAU"].pct_change(LOOKBACK_1Y)
-    ret_ief_1y = prices["IEF"].pct_change(LOOKBACK_1Y)
+    ret_iau_1y = prices["IAU"].pct_change(LOOKBACK_1Y, fill_method=None)
+    ret_ief_1y = prices["IEF"].pct_change(LOOKBACK_1Y, fill_method=None)
     
     # 월말에만 시그널 계산
     iau_on_signal = (ret_iau_1y > 0) & (ret_ief_1y > 0)
-    iau_on_monthly = iau_on_signal.loc[iau_on_signal.index.isin(monthly_idx)]
+    # 월말(Month End)의 시그널을 가져옴
+    iau_on_monthly = iau_on_signal.resample("ME").last()
 
     # 일별로 시그널 확장 (forward-fill)
-    iau_on = iau_on_monthly.reindex(idx).ffill()
+    iau_on = iau_on_monthly.reindex(idx, method='ffill')
     
     iau_on = iau_on.fillna(False) # 데이터 부족 구간은 OFF
 
@@ -229,9 +228,9 @@ def laa_ma4_signal(prices: pd.DataFrame, verbose: bool = False) -> Dict[str, flo
             print(f"Last IAU Signal Date: {last_signal_date.date()}")
 
             if len(prices.loc[:last_signal_date]) > LOOKBACK_1Y:
-                ret_iau_1y = prices["IAU"].pct_change(LOOKBACK_1Y).loc[last_signal_date]
-                ret_ief_1y = prices["IEF"].pct_change(LOOKBACK_1Y).loc[last_signal_date]
-                iau_on_at_signal = (ret_iau_1y > 0) and (ret_ief_1y > 0)
+                ret_iau_1y = prices["IAU"].pct_change(LOOKBACK_1Y, fill_method=None).asof(last_signal_date)
+                ret_ief_1y = prices["IEF"].pct_change(LOOKBACK_1Y, fill_method=None).asof(last_signal_date)
+                iau_on_at_signal = (ret_iau_1y > 0) and (ret_ief_1y > 0) if pd.notna(ret_iau_1y) and pd.notna(ret_ief_1y) else False
                 print(f"  IAU 1Y Return: {ret_iau_1y*100:.2f}%")
                 print(f"  IEF 1Y Return: {ret_ief_1y*100:.2f}%")
                 print(f"  -> IAU Hold  : {iau_on_at_signal}")

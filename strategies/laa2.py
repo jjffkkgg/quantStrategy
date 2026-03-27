@@ -125,7 +125,7 @@ def _laa2_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     cols = list(prices.columns)
 
     # 월말 인덱스 (마지막 영업일 기준)
-    monthly_idx = prices.resample("M").last().index
+    monthly_idx = prices.resample("ME").last().index
 
     # 실업률 전체 시계열
     unrate_full = load_unemployment_rate().dropna()
