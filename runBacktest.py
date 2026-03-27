@@ -27,6 +27,7 @@ import sys
 from typing import Dict, List
 
 import pandas as pd
+import numpy as np
 
 from utils.backtest import run_backtest
 from utils.data_loader import load_prices
@@ -394,8 +395,84 @@ def main():
     print(f"[INFO] 사용 티커: {tickers}")
 
     # 2) 가격 로딩
+    # 백테스트 시작일 이전에 데이터가 없는 ETF들을 위한 역사적 프록시 정의
+    # data_loader.py에서 이미 QQQ->^NDX, SPY->^GSPC, IAU->GC=F, SGOV->^IRX 매핑을 처리합니다.
+    # 여기서는 IWD, IEF와 같이 직접 다운로드되지만 역사가 짧은 티커들을 대상으로 프록시를 추가합니다.
+    historical_fill_proxies = {
+        "IWD": "VWNDX", # iShares Russell 1000 Value ETF (시작: 2000년) -> Vanguard Developed Markets Index Fund Admiral Shares
+        "IEF": "^TNX",  # iShares 7-10 Year Treasury Bond ETF (시작: 2002년) -> 10-Year Treasury Yield
+    }
+
+    # 전략 티커 목록에 프록시 티커 추가 (다운로드를 위해)
+    tickers_to_download = list(tickers) # 원본 리스트 복사
+    for target_ticker, proxy_ticker in historical_fill_proxies.items():
+        if target_ticker in tickers_to_download and proxy_ticker not in tickers_to_download:
+            tickers_to_download.append(proxy_ticker)
+            print(f"[INFO] '{target_ticker}'의 역사적 데이터 보충을 위해 프록시 티커 '{proxy_ticker}'를 다운로드 목록에 추가합니다.")
+
+    # 2) 가격 로딩 (확장된 티커 목록 사용)
     print("[INFO] 가격 데이터 로드 중...")
-    price_df = load_prices(tickers=tickers, start="1995-01-01")
+    price_df = load_prices(tickers=tickers_to_download, start="1985-01-01")
+
+    # 다운로드된 프록시 티커로 원본 티커의 초기 누락 데이터 채우기
+    for target_ticker, proxy_ticker in historical_fill_proxies.items():
+        if target_ticker in price_df.columns and proxy_ticker in price_df.columns:
+            # 타겟 티커의 첫 유효 데이터 인덱스 찾기
+            first_valid_target_idx = price_df[target_ticker].first_valid_index()
+
+            if first_valid_target_idx is None:
+                print(f"[INFO] '{target_ticker}'에 유효한 데이터가 없어 프록시 채우기를 건너킵니다.")
+                continue
+
+            # 타겟 티커의 첫 유효 데이터 시점의 값
+            target_value_at_start = price_df.loc[first_valid_target_idx, target_ticker]
+            
+            # 프록시 티커의 해당 시점 값
+            proxy_value_at_start = price_df.loc[first_valid_target_idx, proxy_ticker]
+
+            if pd.isna(target_value_at_start) or pd.isna(proxy_value_at_start) or proxy_value_at_start == 0:
+                print(f"[WARNING] '{target_ticker}' 또는 '{proxy_ticker}'의 시작점 데이터가 유효하지 않아 프록시 채우기를 건너킵니다.")
+                continue
+
+            # 타겟 티커가 NaN이고 프록시 티커가 유효한 기간 마스크
+            missing_period_mask = price_df[target_ticker].isna() & price_df[proxy_ticker].notna()
+            
+            if missing_period_mask.sum() == 0:
+                print(f"[INFO] '{target_ticker}'에 채울 누락 데이터가 없거나 '{proxy_ticker}' 데이터가 부족합니다.")
+                continue
+
+            # 전체 프록시 시리즈
+            proxy_series = price_df[proxy_ticker]
+
+            synthetic_series_part = pd.Series(np.nan, index=price_df.index)
+
+            if target_ticker == "IWD": # 가격-대-가격 프록시 (정비례 관계)
+                scaling_factor = target_value_at_start / proxy_value_at_start
+                synthetic_series_part.loc[missing_period_mask] = proxy_series.loc[missing_period_mask] * scaling_factor
+                print(f"[INFO] '{target_ticker}' (IWD)의 초기 누락 데이터를 '{proxy_ticker}' (VWNDX)로 스케일링하여 채웁니다.")
+            elif target_ticker == "IEF": # 가격-대-금리 프록시 (역비례 관계)
+                # P_IEF_t = P_IEF_start * (Y_TNX_start / Y_TNX_t)
+                # 프록시 시리즈(금리)에 0 값이 없는지 확인
+                if (proxy_series.loc[missing_period_mask] == 0).any():
+                    print(f"[WARNING] '{proxy_ticker}' (YIELD)에 0 값이 있어 '{target_ticker}' (IEF) 프록시 채우기를 건너킵니다.")
+                    continue
+                synthetic_series_part.loc[missing_period_mask] = target_value_at_start * (proxy_value_at_start / proxy_series.loc[missing_period_mask])
+                print(f"[INFO] '{target_ticker}' (IEF)의 초기 누락 데이터를 '{proxy_ticker}' (^TNX)의 역비례 관계로 스케일링하여 채웁니다.")
+            else:
+                # 새로운 프록시 타입이 추가되었을 때를 위한 기본 combine_first 폴백
+                synthetic_series_part.loc[missing_period_mask] = price_df.loc[missing_period_mask, proxy_ticker]
+                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터를 '{proxy_ticker}' 데이터로 채웁니다 (기본 combine_first).")
+
+            original_nan_count = price_df[target_ticker].isna().sum()
+            price_df[target_ticker] = price_df[target_ticker].combine_first(synthetic_series_part)
+            filled_nan_count = price_df[target_ticker].isna().sum()
+            
+            if original_nan_count > filled_nan_count:
+                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터 {original_nan_count - filled_nan_count}개를 '{proxy_ticker}' 데이터로 채웠습니다.")
+            elif filled_nan_count == original_nan_count:
+                print(f"[INFO] '{target_ticker}'의 누락 데이터를 '{proxy_ticker}'로 채우지 못했습니다 (프록시 데이터도 누락되었거나 충분하지 않음).")
+        else:
+            print(f"[INFO] '{target_ticker}' 또는 '{proxy_ticker}' 컬럼이 price_df에 없어 프록시 채우기를 건너킵니다.")
 
     if not isinstance(price_df.index, pd.DatetimeIndex):
         raise ValueError("load_prices 결과의 index가 DatetimeIndex가 아닙니다.")
@@ -406,6 +483,9 @@ def main():
     # 3) 전략별 weight 시계열 생성
     print("[INFO] 전략 weight 시계열 생성 중...")
     weight_df = get_strategy_weights(strategy_name, price_df)
+
+    # 최종 price_df에서 전략에 필요한 티커만 남기고, 추가 다운로드된 프록시 티커는 제거
+    price_df = price_df[list(tickers)]
 
     print(f"[INFO] 리밸런싱/적용 기간: {weight_df.index[0].date()} ~ {weight_df.index[-1].date()}")
 
