@@ -7,6 +7,7 @@
 - DM       : 듀얼모멘텀 (adjDualMomentum 모듈)
 - LAA_DM   : DM 을 리스크판단에 사용하는 LAA 변형
 - LAA_MA   : QQQ MA 를 리스크판단에 사용하는 LAA 변형
+- MA2      : QQQ, IWD 각자의 MA 전략으로 ON/OFF
 """
 
 from config import START_DATE, TICKERS
@@ -18,6 +19,7 @@ from strategies.adjDualMomentum import dual_momentum_signal
 from strategies.laaDm import laa_dm_signal
 from strategies.laaMA import laa_ma_signal
 from strategies.laaMA2 import laa_ma2_signal
+from strategies.ma2 import ma2_signal
 from strategies.dm_rp import dm_rp_signal
 
 def print_weight_result(name: str, result):
@@ -107,6 +109,12 @@ def main():
     except Exception as e:
         laa_ma2 = f"Error: {e}"
 
+    # ---------- MA2 (QQQ, IWD MA 기반) ----------
+    try:
+        ma2 = ma2_signal(prices, verbose=True)
+    except Exception as e:
+        ma2 = f"Error: {e}"
+
     # ---------- DM_RP (Dual Momentum + Risk Parity) ----------
     try:
         dm_rp = dm_rp_signal(prices, verbose=True)
@@ -121,6 +129,7 @@ def main():
     print_weight_result("LAA_DM", laa_dm)
     print_weight_result("LAA_MA", laa_ma)
     print_weight_result("LAA_MA2", laa_ma2)
+    print_weight_result("MA2", ma2)
     print_weight_result("DM_RP", dm_rp)
 
 

@@ -15,7 +15,8 @@
 - DM      : 듀얼모멘텀 (SPY/EFA + 안전자산)
 - LAA_DM  : 듀얼모멘텀을 리스크온/오프 스위치로 사용하는 LAA 변형
 - LAA_MA  : 실업률 대신 QQQ MA 로 리스크온/오프를 결정하는 LAA 변형
-- LAA_MA2 : QQQ + IWD MA 로 리스크온/오프를 결정하는 LAA 변형
+- LAA_MA2 : QQQ는 MA로, IWD는 경기/추세로 리스크온/오프를 결정하는 LAA 변형
+- MA2     : QQQ, IWD 각자의 MA 전략으로 ON/OFF 하는 전략
 - DM_RP   : 듀얼모멘텀 + 리스크패리티 오버레이 전략
 """
 
@@ -36,6 +37,7 @@ from strategies.laa2 import get_weights as laa2_get_weights
 from strategies.laaDm import get_weights as laa_dm_get_weights
 from strategies.laaMA import get_weights as laa_ma_get_weights
 from strategies.laaMA2 import get_weights as laa_ma2_get_weights
+from strategies.ma2 import get_weights as ma2_get_weights
 from strategies.dm_rp import get_weights as dm_rp_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
 
@@ -75,6 +77,9 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
     if name == "LAA_MA":
         # LAA_MA: LAA 와 동일한 ETF 세트
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV"]
+    
+    if name == "MA2":
+        return ["QQQ", "IWD", "IAU", "IEF", "SGOV"]
     
     if name == "LAA_MA2":          # 🔹 새로 추가
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
@@ -338,6 +343,9 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     if name == "LAA_MA":
         return laa_ma_get_weights(price_df)
     
+    if name == "MA2":
+        return ma2_get_weights(price_df)
+    
     if name == "LAA_MA2":
         return laa_ma2_get_weights(price_df)
     
@@ -365,6 +373,7 @@ def main():
         print("       python runBacktest.py DM")
         print("       python runBacktest.py LAA_DM")
         print("       python runBacktest.py LAA_MA")
+        print("       python runBacktest.py MA2")
         sys.exit(1)
 
     strategy_name = sys.argv[1].upper()
