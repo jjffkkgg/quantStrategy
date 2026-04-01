@@ -72,7 +72,7 @@ def _inverse_vol_weights(
         n = len(valid_cols)
         return {c: 1.0 / n for c in valid_cols}
 
-    rets = prices.pct_change().dropna()
+    rets = prices.pct_change(fill_method=None).dropna()
     rets_lb = rets.tail(lookback)
 
     vols = rets_lb.std()
