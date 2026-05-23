@@ -7,13 +7,16 @@ TICKERS = [
     "QQQ", "IEF", "IWD", "IAU", "SGOV", "^NDX",
 
     # 듀얼모멘텀(DM) 및 기타
-    "SPY", "EFA", "SHY", "TLT", "TIP", "LQD", "HYG", "BWX", "EMB",
+    "SPY", "EFA", "SHY", "TLT", "TIP", "LQD", "HYG", "BWX", "EMB", "IWM",
 
     # 기타 전략용 (원하면 유지)
-    "AGG", "DBC", "EEM", "VNQ",
+    "AGG", "DBC", "EEM", "VNQ", "VEA", "VWO", "BIL",
 
     # S&P500 MA 전략
     "^GSPC",
+
+    # 프록시용 티커
+    "IYR", "GSG", "^RUT", "^TNX", "^TYX", "^IRX",
 ]
 
 # 가격 데이터 시작일

@@ -46,6 +46,7 @@ from strategies.dm_rp import get_weights as dm_rp_get_weights
 from strategies.laaMA3 import get_weights as laa_ma3_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
 from strategies.laaMA4 import get_weights as laa_ma4_get_weights
+from strategies.haa import get_weights as haa_get_weights
 
 
 # ----------------------------------------------------------------------
@@ -106,6 +107,13 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
             "SHY", "IEF", "TLT", "TIP", "LQD", "HYG", "BWX", "EMB",  # 방어 ETF
             "SGOV",                             # 캐시 대체
         ]
+
+    if name == "HAA":
+        # Hybrid Asset Allocation by W. Keller
+        # Offensive: SPY, IWM, VEA, VWO, VNQ, DBC, IEF, TLT
+        # Defensive: BIL, IEF
+        # Canary: TIP
+        return ["SPY", "IWM", "VEA", "VWO", "VNQ", "DBC", "IEF", "TLT", "BIL", "TIP", "SGOV"]
 
 
     raise ValueError(f"지원하지 않는 전략 이름입니다: {strategy_name}")
@@ -373,6 +381,9 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     if name == "DM_RP":
         return dm_rp_get_weights(price_df)
 
+    if name == "HAA":
+        return haa_get_weights(price_df)
+
 
     raise ValueError(f"지원하지 않는 전략입니다: {strategy_name}")
 
@@ -394,6 +405,7 @@ def main():
         print("       python runBacktest.py MA2")
         print("       python runBacktest.py LAA_MA3")
         print("       python runBacktest.py LAA_MA4")
+        print("       python runBacktest.py HAA")
         sys.exit(1)
         
     strategy_name = sys.argv[1].upper()
@@ -410,6 +422,14 @@ def main():
     historical_fill_proxies = {
         "IWD": "VWNDX", # iShares Russell 1000 Value ETF (시작: 2000년) -> Vanguard Developed Markets Index Fund Admiral Shares
         "IEF": "^TNX",  # iShares 7-10 Year Treasury Bond ETF (시작: 2002년) -> 10-Year Treasury Yield
+        # HAA 전략을 위한 프록시
+        "IWM": "^RUT",      # iShares Russell 2000 ETF (2000) -> Russell 2000 Index
+        "VEA": "EFA",       # Vanguard FTSE Developed Markets ETF (2007) -> iShares MSCI EAFE ETF (2001)
+        "VWO": "EEM",       # Vanguard FTSE Emerging Markets ETF (2005) -> iShares MSCI Emerging Markets ETF (2003)
+        "VNQ": "IYR",       # Vanguard Real Estate ETF (2004) -> iShares U.S. Real Estate ETF (2000)
+        "DBC": "GSG",       # Invesco DB Commodity Index Tracking Fund (2006) -> iShares S&P GSCI Commodity-Indexed Trust (2006) - 역사가 비슷하지만 대체재로
+        "TLT": "^TYX",      # iShares 20+ Year Treasury Bond ETF (2002) -> 30-Year Treasury Yield
+        "BIL": "^IRX",      # SPDR Bloomberg 1-3 Month T-Bill ETF (2007) -> 13 Week Treasury Bill Yield,
     }
 
     # 전략 티커 목록에 프록시 티커 추가 (다운로드를 위해)
@@ -455,22 +475,19 @@ def main():
 
             synthetic_series_part = pd.Series(np.nan, index=price_df.index)
 
-            if target_ticker == "IWD": # 가격-대-가격 프록시 (정비례 관계)
-                scaling_factor = target_value_at_start / proxy_value_at_start
-                synthetic_series_part.loc[missing_period_mask] = proxy_series.loc[missing_period_mask] * scaling_factor
-                print(f"[INFO] '{target_ticker}' (IWD)의 초기 누락 데이터를 '{proxy_ticker}' (VWNDX)로 스케일링하여 채웁니다.")
-            elif target_ticker == "IEF": # 가격-대-금리 프록시 (역비례 관계)
+            if target_ticker in ("IEF", "TLT", "BIL"): # 가격-대-금리 프록시 (역비례 관계)
                 # P_IEF_t = P_IEF_start * (Y_TNX_start / Y_TNX_t)
                 # 프록시 시리즈(금리)에 0 값이 없는지 확인
                 if (proxy_series.loc[missing_period_mask] == 0).any():
-                    print(f"[WARNING] '{proxy_ticker}' (YIELD)에 0 값이 있어 '{target_ticker}' (IEF) 프록시 채우기를 건너킵니다.")
+                    print(f"[WARNING] '{proxy_ticker}' (YIELD)에 0 값이 있어 '{target_ticker}' 프록시 채우기를 건너킵니다.")
                     continue
                 synthetic_series_part.loc[missing_period_mask] = target_value_at_start * (proxy_value_at_start / proxy_series.loc[missing_period_mask])
-                print(f"[INFO] '{target_ticker}' (IEF)의 초기 누락 데이터를 '{proxy_ticker}' (^TNX)의 역비례 관계로 스케일링하여 채웁니다.")
+                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터를 '{proxy_ticker}'의 역비례 관계로 스케일링하여 채웁니다.")
             else:
-                # 새로운 프록시 타입이 추가되었을 때를 위한 기본 combine_first 폴백
-                synthetic_series_part.loc[missing_period_mask] = price_df.loc[missing_period_mask, proxy_ticker]
-                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터를 '{proxy_ticker}' 데이터로 채웁니다 (기본 combine_first).")
+                # 가격-대-가격 프록시 (정비례 관계)
+                scaling_factor = target_value_at_start / proxy_value_at_start
+                synthetic_series_part.loc[missing_period_mask] = proxy_series.loc[missing_period_mask] * scaling_factor
+                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터를 '{proxy_ticker}'로 스케일링하여 채웁니다.")
 
             original_nan_count = price_df[target_ticker].isna().sum()
             price_df[target_ticker] = price_df[target_ticker].combine_first(synthetic_series_part)
