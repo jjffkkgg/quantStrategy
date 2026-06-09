@@ -47,6 +47,7 @@ from strategies.laaMA3 import get_weights as laa_ma3_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
 from strategies.laaMA4 import get_weights as laa_ma4_get_weights
 from strategies.haa import get_weights as haa_get_weights
+from strategies.laaMA_sandbox import get_weights as laa_ma_sandbox_get_weights
 
 
 # ----------------------------------------------------------------------
@@ -114,6 +115,11 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
         # Defensive: BIL, IEF
         # Canary: TIP
         return ["SPY", "IWM", "VEA", "VWO", "VNQ", "DBC", "IEF", "TLT", "BIL", "TIP", "SGOV"]
+
+    if name == "LAA_SANDBOX":
+        # 샌드박스에서 사용할 수 있는 모든 잠재적 티커 포함
+        # 여기에 테스트하고 싶은 티커를 추가하세요.
+        return ["QQQ", "QLD", "IWD", "IAU", "IEF", "IEI", "SGOV", "SPY", "VTV"]
 
 
     raise ValueError(f"지원하지 않는 전략 이름입니다: {strategy_name}")
@@ -384,6 +390,9 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     if name == "HAA":
         return haa_get_weights(price_df)
 
+    if name == "LAA_SANDBOX":
+        return laa_ma_sandbox_get_weights(price_df)
+
 
     raise ValueError(f"지원하지 않는 전략입니다: {strategy_name}")
 
@@ -406,6 +415,7 @@ def main():
         print("       python runBacktest.py LAA_MA3")
         print("       python runBacktest.py LAA_MA4")
         print("       python runBacktest.py HAA")
+        print("       python runBacktest.py LAA_SANDBOX")
         sys.exit(1)
         
     strategy_name = sys.argv[1].upper()

@@ -25,6 +25,7 @@ from strategies.laaMA3 import laa_ma3_signal
 from strategies.laaMA4 import laa_ma4_signal
 from strategies.dm_rp import dm_rp_signal
 from strategies.haa import haa_signal
+from strategies.laaMA_sandbox import laa_sandbox_signal
 
 def print_weight_result(name: str, result):
     """
@@ -53,6 +54,8 @@ def main():
         "EFA", "SHY", "TLT", "TIP", "LQD", "HYG", "BWX", "EMB",
         # S&P500 MA
         "^GSPC",
+        # Sandbox (potential tickers)
+        "QLD", "IEI",
         # DM_RP에 쓰일 수 있는 애들 (이미 위에 대부분 포함이지만 그냥 한 번 더)
         "IWM", "VEA", "VWO", "VNQ", "DBC", "BIL", # HAA tickers
     ]
@@ -151,6 +154,12 @@ def main():
     except Exception as e:
         haa = f"Error: {e}"
 
+    # ---------- LAA_SANDBOX (테스트용) ----------
+    try:
+        laa_sandbox = laa_sandbox_signal(prices, verbose=True)
+    except Exception as e:
+        laa_sandbox = f"Error: {e}"
+
 
     print("\n=== Signals ===")
     print_weight_result("LAA", laa)
@@ -165,6 +174,7 @@ def main():
     print_weight_result("LAA_MA4", laa_ma4)
     print_weight_result("DM_RP", dm_rp)
     print_weight_result("HAA", haa)
+    print_weight_result("LAA_SANDBOX", laa_sandbox)
 
 
 
