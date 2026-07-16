@@ -9,14 +9,22 @@ import numpy as np
 ###############################################################################
 
 """
-전략에서는 항상 논리 티커 (QQQ, SGOV, IAU 등)만 사용하고,
-실제 Yahoo ticker 매핑은 이 파일에서만 관리한다.
+전략에서는 항상 논리 티커 (QQQ, SGOV, IAU 등)만 사용하고, 실제 Yahoo ticker 매핑은 이 파일에서만 관리합니다.
 
-QQQ  -> ^NDX (proxy)
-IAU  -> GC=F (Gold futures)
-SGOV -> synthetic cash (3M T-Bill ^IRX 기반)
+- MA 신호 계산 시에는 지수(Index)를 사용하고 (QQQ -> ^IXIC)
+- 백테스트 및 실제 거래에서는 ETF 자체 가격을 사용하도록 분리.
 """
 
+# MA 신호 계산에 사용할 프록시 티커.
+# 여기에 정의된 티커는 load_close_for_ma() 함수에서 지수 가격(Close)을 가져오는 데 사용됩니다.
+MA_PROXY_TICKERS = {
+    "QQQ": "^IXIC",
+    "SPY": "^GSPC",
+}
+
+# 백테스트 및 실제 거래에 사용할 티커.
+# load_prices() 함수는 여기를 참조하여 ETF의 수정종가(Adj Close)를 가져옵니다.
+# QQQ, SPY가 더 이상 지수로 매핑되지 않으므로, 실제 ETF 가격으로 백테스트가 수행됩니다.
 REAL_TICKERS = {
     "QQQ": "^NDX",
     "SPY": "^GSPC",
@@ -24,7 +32,7 @@ REAL_TICKERS = {
     "SGOV": None,
     "IEF": "IEF",
     "IWD": "IWD",
-    # 나머지는 그대로 사용
+    # QQQ, SPY는 매핑에서 제거되어 ETF 자체를 다운로드하게 됨.
 }
 
 CASH_PROXY_TICKER = "^IRX"
@@ -165,11 +173,11 @@ def load_close_for_ma(ticker: str, start: str = "1995-01-01") -> pd.Series:
     """
     MA 전략에서만 사용할 '원시 Close' 시계열 로더.
 
-    - 논리 티커(예: "QQQ")를 넣으면 REAL_TICKERS 매핑을 거쳐 실제 Yahoo 티커에서 Close를 가져옴.
+    - 논리 티커(예: "QQQ")를 넣으면 MA_PROXY_TICKERS 매핑을 거쳐 실제 지수 티커에서 Close를 가져옴.
     - Adj Close 기준 백테스트(price_df)와는 분리해서, MA 신호 전용으로만 사용.
     """
-    # 논리 티커 -> 실제 티커 매핑 (QQQ -> ^IXIC 등)
-    real = REAL_TICKERS.get(ticker, ticker)
+    # 논리 티커 -> MA 계산용 프록시 티커 매핑 (QQQ -> ^IXIC 등)
+    real = MA_PROXY_TICKERS.get(ticker, ticker)
 
     raw = yf.download(real, start=start, auto_adjust=False)
     if raw.empty:

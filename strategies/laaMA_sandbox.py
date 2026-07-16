@@ -25,7 +25,7 @@ from strategies.laa import _is_recession, _is_market_uptrend
 TICKER_AGGRESSIVE = "QQQ"    # 공격 자산 (MA 전략 적용)
 TICKER_VALUE = "IWD"         # 가치 자산 (경기/추세 판단)
 TICKER_GOLD = "IAU"          # 금 (수익률 모멘텀)
-TICKER_BOND = "IEI"          # 채권 (고정 보유 또는 동적)
+TICKER_BOND = "IEF"          # 채권 (고정 보유 또는 동적)
 TICKER_CASH = "SGOV"         # 현금성 자산
 TICKER_MARKET = "SPY"        # 시장 추세 판단용
 
@@ -46,13 +46,13 @@ GOLD_LOOKBACK_YEARS = 1 # 1년 수익률
 LOOKBACK_1Y = 252 * GOLD_LOOKBACK_YEARS
 
 # 5. 가치 자산 (VALUE) 전략 설정
-VALUE_STRATEGY: Literal['REGIME', 'MA', 'HOLD'] = 'MA' # 'REGIME', 'MA', 또는 'HOLD'
+VALUE_STRATEGY: Literal['REGIME', 'MA', 'HOLD'] = 'REGIME' # 'REGIME', 'MA', 또는 'HOLD'
 # 'REGIME': LAA와 동일한 (실업률 > 12M SMA) and (SPY < 200D MA) 로직 사용
 # 'MA'    : AGGRESSIVE와 유사한 MA 정배열/역배열 로직 (아래 설정 적용)
 # 'HOLD'  : 항상 보유 (전략 끄기)
 
 # 5-1. VALUE 'MA' 전략 사용 시 설정
-VALUE_MA_TIMEFRAME: Literal['daily', 'weekly'] = 'weekly'
+VALUE_MA_TIMEFRAME: Literal['daily', 'weekly'] = 'daily'
 VALUE_MA_PERIODS = [5, 10, 20, 60]
 VALUE_COOLDOWN_DAYS = 0
 
