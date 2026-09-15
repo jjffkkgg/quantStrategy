@@ -16,6 +16,7 @@ import numpy as np
 from utils.data_loader import load_close_for_ma
 from utils.macro_data import load_unemployment_rate
 from strategies.laa import _is_recession, _is_market_uptrend
+from strategies.laaMA4 import _completed_month_end_signal
 
 # ----------------------------------------------------------------------
 # 설정 (여기서 값을 변경하여 테스트)
@@ -254,9 +255,9 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     ret_ref_bond_1y = prices[TICKER_GOLD_REF_BOND].pct_change(LOOKBACK_1Y, fill_method=None)
 
     gold_on_signal = (ret_gold_1y > 0) & (ret_ref_bond_1y > 0)
-    gold_on_monthly = gold_on_signal.resample("ME").last()
+    gold_on_monthly = _completed_month_end_signal(gold_on_signal, idx)
 
-    gold_on = gold_on_monthly.reindex(idx, method='ffill').fillna(False)
+    gold_on = gold_on_monthly.reindex(idx).ffill().fillna(False).astype(bool)
 
     # 4. weight DataFrame 구성
     weight_df = pd.DataFrame(0.0, index=idx, columns=prices.columns)

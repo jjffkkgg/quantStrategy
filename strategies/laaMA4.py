@@ -58,6 +58,31 @@ from strategies.laa import _is_recession, _is_market_uptrend
 QQQ_COOLDOWN_DAYS = 30  # QQQ 재진입 쿨다운 (laaMA2F와 동일)
 LOOKBACK_1Y = 252 # 1년 수익률 계산을 위한 lookback 기간 (영업일 기준)
 
+
+def _completed_month_end_signal(
+    signal: pd.Series, price_index: pd.DatetimeIndex
+) -> pd.Series:
+    """Timestamp completed-month signals on their final actual trading day.
+
+    Calendar month-end labels often fall on a non-trading day.  Keeping that
+    label and then shifting weights in the backtest delays a month-end decision
+    by two trading days.  This helper removes the incomplete current month and
+    maps each completed month-end to the last available trading date.
+    """
+    if signal.empty or price_index.empty:
+        return pd.Series(dtype=bool)
+
+    monthly = signal.resample("ME").last()
+    monthly = monthly.loc[monthly.index <= price_index[-1].normalize()]
+    if monthly.empty:
+        return pd.Series(dtype=bool)
+
+    positions = price_index.searchsorted(monthly.index, side="right") - 1
+    valid = positions >= 0
+    return pd.Series(
+        monthly.to_numpy()[valid], index=price_index[positions[valid]], dtype=bool
+    )
+
 # ----------------------------------------------------------------------
 # 1) (LAA_MA2F와 동일) 경기/추세 regime 시리즈 계산
 # ----------------------------------------------------------------------
@@ -191,12 +216,10 @@ def _laa_ma4_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     # 월말에만 시그널 계산
     iau_on_signal = (ret_iau_1y > 0) & (ret_ief_1y > 0)
     # 월말(Month End)의 시그널을 가져옴
-    iau_on_monthly = iau_on_signal.resample("ME").last()
+    iau_on_monthly = _completed_month_end_signal(iau_on_signal, idx)
 
     # 일별로 시그널 확장 (forward-fill)
-    iau_on = iau_on_monthly.reindex(idx, method='ffill')
-    
-    iau_on = iau_on.fillna(False) # 데이터 부족 구간은 OFF
+    iau_on = iau_on_monthly.reindex(idx).ffill().fillna(False).astype(bool)
 
     # ------------------------------
     # 3-4) weight DataFrame 구성
