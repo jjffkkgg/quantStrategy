@@ -47,7 +47,8 @@ from typing import Dict
 import pandas as pd
 
 from utils.data_loader import load_close_for_ma
-from utils.macro_data import load_unemployment_rate
+from utils.macro_data import load_unemployment_vintages, unemployment_asof
+from utils.trading_calendar import completed_month_ends
 from strategies.customMA import _ma_alignment_weights
 from strategies.laa import _is_recession, _is_market_uptrend
 
@@ -72,16 +73,8 @@ def _completed_month_end_signal(
     if signal.empty or price_index.empty:
         return pd.Series(dtype=bool)
 
-    monthly = signal.resample("ME").last()
-    monthly = monthly.loc[monthly.index <= price_index[-1].normalize()]
-    if monthly.empty:
-        return pd.Series(dtype=bool)
-
-    positions = price_index.searchsorted(monthly.index, side="right") - 1
-    valid = positions >= 0
-    return pd.Series(
-        monthly.to_numpy()[valid], index=price_index[positions[valid]], dtype=bool
-    )
+    ends = completed_month_ends(price_index)
+    return signal.reindex(ends).dropna().astype(bool)
 
 # ----------------------------------------------------------------------
 # 1) (LAA_MA2F와 동일) 경기/추세 regime 시리즈 계산
@@ -96,18 +89,18 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     if "SPY" not in prices.columns:
         raise ValueError("LAA_MA4 전략에는 'SPY' 가격 데이터가 필요합니다.")
 
-    unrate_full = load_unemployment_rate().dropna()
-    monthly_idx = prices.resample("ME").last().index
+    unrate_vintages = load_unemployment_vintages()
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []
 
     for dt in monthly_idx:
-        unrate_sub = unrate_full[unrate_full.index <= dt]
+        unrate_sub = unemployment_asof(unrate_vintages, dt)
         spy_sub = prices["SPY"].loc[:dt].dropna()
 
         if len(unrate_sub) < 13:
-            continue
+            raise ValueError(f"Insufficient point-in-time UNRATE history at {dt.date()}")
         if len(spy_sub) < 200:
             continue
 
@@ -122,7 +115,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     else:
         regime_m = pd.DataFrame(rows, index=pd.DatetimeIndex(idxs))
 
-    regime_d = regime_m.reindex(prices.index).ffill()
+    regime_d = regime_m.astype('boolean').reindex(prices.index).ffill()
     regime_d["recession"] = regime_d["recession"].fillna(False)
     regime_d["uptrend"] = regime_d["uptrend"].fillna(True)
 
@@ -219,7 +212,7 @@ def _laa_ma4_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     iau_on_monthly = _completed_month_end_signal(iau_on_signal, idx)
 
     # 일별로 시그널 확장 (forward-fill)
-    iau_on = iau_on_monthly.reindex(idx).ffill().fillna(False).astype(bool)
+    iau_on = iau_on_monthly.astype('boolean').reindex(idx).ffill().fillna(False).astype(bool)
 
     # ------------------------------
     # 3-4) weight DataFrame 구성
@@ -269,7 +262,7 @@ def laa_ma4_signal(prices: pd.DataFrame, verbose: bool = False) -> Dict[str, flo
         print(f"Date : {last_date.date()}")
         print("IAU signal is checked at month-end and held for the next month.")
         
-        monthly_idx = prices.resample("ME").last().index
+        monthly_idx = completed_month_ends(prices.index)
         relevant_monthly_dates = monthly_idx[monthly_idx <= last_date]
         
         if not relevant_monthly_dates.empty:

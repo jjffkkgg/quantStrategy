@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import numpy as np
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 
 # ------------------------------------------------------------
@@ -293,7 +294,7 @@ def _dm_rp_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     prices = prices.sort_index()
     cols = list(prices.columns)
 
-    monthly_idx = prices.resample("ME").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []

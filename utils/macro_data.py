@@ -3,6 +3,68 @@
 import io
 import pandas as pd
 import requests
+import os
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def load_unemployment_vintages() -> pd.DataFrame:
+    """UNRATE values indexed by observation and actual availability dates.
+
+    UNRATE_VINTAGES_CSV may point to an ALFRED-format CSV containing date,
+    realtime_start, value. Otherwise FRED_API_KEY is required. Never fall back
+    to revised current data, which would silently reintroduce look-ahead.
+    """
+    path = os.environ.get('UNRATE_VINTAGES_CSV')
+    if path:
+        data = pd.read_csv(path)
+    else:
+        key = os.environ.get('FRED_API_KEY')
+        if not key:
+            raise RuntimeError('Point-in-time UNRATE requires FRED_API_KEY or '
+                               'UNRATE_VINTAGES_CSV (date,realtime_start,value).')
+        rows = []
+        offset = 0
+        while True:
+            try:
+                response = requests.get(
+                    'https://api.stlouisfed.org/fred/series/observations',
+                    params=dict(series_id='UNRATE', api_key=key, file_type='json',
+                                realtime_start='1776-07-04', realtime_end='9999-12-31',
+                                output_type=1, limit=100000, offset=offset), timeout=60)
+            except requests.RequestException:
+                # Request exceptions can include the complete URL and API key.
+                raise RuntimeError('ALFRED connection failed. Check network access and retry.') from None
+            # Do not include the request URL (which contains the key) in errors.
+            if response.status_code != 200:
+                raise RuntimeError(f'ALFRED request failed: HTTP {response.status_code}')
+            payload = response.json()
+            batch = payload.get('observations', [])
+            rows.extend(batch)
+            offset += len(batch)
+            if offset >= int(payload.get('count', 0)):
+                break
+            if not batch:
+                raise RuntimeError('Incomplete ALFRED response.')
+        data = pd.DataFrame(rows)
+    required = ['date', 'realtime_start', 'value']
+    if not set(required).issubset(data.columns):
+        raise ValueError('UNRATE vintage data requires date,realtime_start,value.')
+    data = data[required].copy()
+    for col in required[:2]:
+        data[col] = pd.to_datetime(data[col], errors='raise')
+    data['value'] = pd.to_numeric(data['value'], errors='coerce')
+    if data.empty:
+        raise ValueError('UNRATE vintage history is empty.')
+    return data.sort_values(['realtime_start', 'date'])
+
+
+def unemployment_asof(vintages: pd.DataFrame, decision_date) -> pd.Series:
+    """Reconstruct the latest available revision for each observation month."""
+    date = pd.Timestamp(decision_date)
+    known = vintages.loc[(vintages.realtime_start <= date) & (vintages.date <= date)]
+    latest = known.sort_values('realtime_start').drop_duplicates('date', keep='last')
+    return latest.set_index('date')['value'].sort_index().dropna().rename('UNRATE')
 
 
 def load_unemployment_rate(start: str = "1950-01-01") -> pd.Series:

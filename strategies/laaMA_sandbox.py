@@ -14,7 +14,8 @@ import pandas as pd
 import numpy as np
 
 from utils.data_loader import load_close_for_ma
-from utils.macro_data import load_unemployment_rate
+from utils.macro_data import load_unemployment_vintages, unemployment_asof
+from utils.trading_calendar import completed_month_ends
 from strategies.laa import _is_recession, _is_market_uptrend
 from strategies.laaMA4 import _completed_month_end_signal
 
@@ -127,18 +128,18 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     if TICKER_MARKET not in prices.columns:
         raise ValueError(f"Sandbox 전략에는 '{TICKER_MARKET}' 가격 데이터가 필요합니다.")
 
-    unrate_full = load_unemployment_rate().dropna()
-    monthly_idx = prices.resample("ME").last().index
+    unrate_vintages = load_unemployment_vintages()
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []
 
     for dt in monthly_idx:
-        unrate_sub = unrate_full[unrate_full.index <= dt]
+        unrate_sub = unemployment_asof(unrate_vintages, dt)
         spy_sub = prices[TICKER_MARKET].loc[:dt].dropna()
 
         if len(unrate_sub) < 13:
-            continue
+            raise ValueError(f"Insufficient point-in-time UNRATE history at {dt.date()}")
         if len(spy_sub) < 200:
             continue
 
@@ -153,7 +154,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     else:
         regime_m = pd.DataFrame(rows, index=pd.DatetimeIndex(idxs))
 
-    regime_d = regime_m.reindex(prices.index).ffill()
+    regime_d = regime_m.astype('boolean').reindex(prices.index).ffill()
     regime_d["recession"] = regime_d["recession"].fillna(False)
     regime_d["uptrend"] = regime_d["uptrend"].fillna(True)
 
@@ -257,7 +258,7 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     gold_on_signal = (ret_gold_1y > 0) & (ret_ref_bond_1y > 0)
     gold_on_monthly = _completed_month_end_signal(gold_on_signal, idx)
 
-    gold_on = gold_on_monthly.reindex(idx).ffill().fillna(False).astype(bool)
+    gold_on = gold_on_monthly.astype('boolean').reindex(idx).ffill().fillna(False).astype(bool)
 
     # 4. weight DataFrame 구성
     weight_df = pd.DataFrame(0.0, index=idx, columns=prices.columns)

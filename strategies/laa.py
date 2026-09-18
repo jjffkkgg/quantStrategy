@@ -20,6 +20,7 @@
 
 from typing import Dict, Optional
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 from utils.macro_data import load_unemployment_rate
 
@@ -181,7 +182,7 @@ def _laa_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     cols = list(prices.columns)
 
     # 월말 인덱스 뽑기
-    monthly_idx = prices.resample("ME").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     # 실업률 전체 시계열
     unrate_full = load_unemployment_rate().dropna()
@@ -236,7 +237,7 @@ def debug_laa_states(prices: pd.DataFrame) -> pd.DataFrame:
     prices = prices.sort_index()
     unrate_full = load_unemployment_rate().dropna()
 
-    monthly_idx = prices.resample("M").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []

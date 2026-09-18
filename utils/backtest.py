@@ -6,8 +6,43 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, Optional
+from utils.trading_calendar import completed_month_ends
 
 TRADING_DAYS = 252  # 연 환산용
+
+
+def defer_pre_history_allocations(
+    price_df: pd.DataFrame, weight_df: pd.DataFrame, cash_ticker: str = 'SGOV'
+) -> pd.DataFrame:
+    """Park allocations in cash until an asset has an observed price.
+
+    Only the leading unavailable history is handled. Later missing marks are
+    left for the engine to validate. The original strategy targets are not
+    mutated, and becoming available generates a normal delayed trade signal.
+    """
+    prices = price_df.sort_index()
+    # Monthly strategies supply sparse targets. Expand before checking history
+    # so an asset can become available between two signal dates.
+    weights = weight_df.sort_index()
+    weights = weights.reindex(weights.index.union(prices.index)).ffill()
+    weights = weights.reindex(prices.index).fillna(0.0).copy()
+    if cash_ticker not in prices or cash_ticker not in weights:
+        raise ValueError(f'Pre-history allocation requires {cash_ticker}.')
+    for ticker in weights.columns:
+        if ticker == cash_ticker or not weights[ticker].gt(0).any():
+            continue
+        if ticker not in prices:
+            raise ValueError(f'Missing price column: {ticker}')
+        valid = prices[ticker].gt(0) & np.isfinite(prices[ticker])
+        if not valid.any():
+            raise ValueError(f'No valid price history for allocated asset {ticker}; check download.')
+        deferred = ~valid.cummax() & weights[ticker].gt(0)
+        if deferred.any():
+            weights.loc[deferred, cash_ticker] += weights.loc[deferred, ticker]
+            weights.loc[deferred, ticker] = 0.
+            print(f'[INFO] {ticker}: {int(deferred.sum())} pre-history signal days '
+                  f'allocated to {cash_ticker}; first valid price {prices.index[valid][0].date()}.')
+    return weights
 
 
 @dataclass
@@ -144,91 +179,114 @@ def run_backtest(
     weight_df: pd.DataFrame,
     initial_capital: float = 1_000_000.0,
     shift_weight: bool = True,
+    rebalance: str = "monthly_and_changes",
+    calculate_real_cagr: bool = True,
+    missing_execution: str = 'raise',
+    signal_only_asset: Optional[str] = None,
+    signal_only_weight: float = 0.25,
+    cash_ticker: str = 'SGOV',
 ) -> BacktestResult:
+    """Self-financing holdings with zero costs and explicit close execution.
+
+    With shift_weight=True, a signal at t close executes at t+1 close. Old
+    holdings earn the entire t+1 return; new holdings first earn t+2 returns.
+    False allows same-close execution (optimistic if signals use that close).
+    Rebalance on target changes plus month-end decisions by default. Between
+    events, holdings drift. `changes` and `daily` are also supported.
+    Unallocated capital is zero-interest cash; SGOV earns its supplied return.
     """
-    단일 전략 백테스트.
-
-    Parameters
-    ----------
-    price_df : pd.DataFrame
-        자산별 가격 시계열 (columns = 티커, index = DatetimeIndex, Adj Close 기준)
-    weight_df : pd.DataFrame
-        동일한 티커 컬럼을 가진 포트 비중 시계열.
-        보통 월말/월초/일별 리밸런싱 weight.
-    initial_capital : float
-        초기 자본.
-    shift_weight : bool
-        True면 weight를 하루 뒤로 shift 해서 룩어헤드 방지.
-        (오늘 결정한 weight를 내일 수익률에 적용)
-    """
-
-    # 1) 가격 -> 일간 수익률
-    price_df = price_df.sort_index()
-
-    # FutureWarning 방지를 위해 fill_method=None 명시
-    daily_ret_assets = price_df.pct_change(fill_method=None).fillna(0.0)
-
-    # 2) weight를 가격 인덱스로 맞추고, 리밸런싱 구간 동안 forward fill
+    if signal_only_asset is not None:
+        return _run_separate_sleeves(
+            price_df, weight_df, initial_capital, shift_weight,
+            calculate_real_cagr, missing_execution,
+            signal_only_asset, signal_only_weight, cash_ticker)
+    if rebalance not in {"monthly_and_changes", "monthly", "changes", "daily"}:
+        raise ValueError("Unknown rebalance policy.")
+    if missing_execution not in {'raise', 'defer'}:
+        raise ValueError('Unknown missing execution policy.')
+    price_df = price_df.sort_index().astype(float)
     weight_df = weight_df.sort_index()
-    aligned_weights = (
-        weight_df.reindex(price_df.index)   # 같은 인덱스로 확장
-                .ffill()                    # 마지막 weight 유지
-                .fillna(0.0)
-    )
-
-    # 3) 룩어헤드 방지: weight를 하루 뒤로 밀기
+    if price_df.empty or price_df.index.has_duplicates or weight_df.index.has_duplicates:
+        raise ValueError("Prices must be nonempty and indexes must be unique.")
+    if initial_capital <= 0 or not np.isfinite(initial_capital):
+        raise ValueError("Initial capital must be positive and finite.")
+    extra = weight_df.columns.difference(price_df.columns)
+    if len(extra) and weight_df[extra].fillna(0).abs().to_numpy().any():
+        raise ValueError("Weights contain assets without prices.")
+    targets = weight_df.reindex(columns=price_df.columns, fill_value=0)
+    targets = targets.reindex(targets.index.union(price_df.index)).ffill()
+    targets = targets.reindex(price_df.index).fillna(0).astype(float)
+    if (not np.isfinite(targets.to_numpy()).all() or (targets < -1e-12).any().any()
+            or (targets.sum(axis=1) > 1 + 1e-9).any()):
+        raise ValueError("Only finite, long-only, unleveraged targets are supported.")
+    changed = targets.diff().abs().gt(1e-10).any(axis=1)
+    changed.iloc[0] = targets.iloc[0].abs().sum() > 0
+    decisions = changed.copy()
+    if rebalance == 'monthly':
+        decisions[:] = False
+        decisions.iloc[0] = changed.iloc[0]
+        decisions.loc[completed_month_ends(price_df.index)] = True
+    elif rebalance == "monthly_and_changes":
+        decisions.loc[completed_month_ends(price_df.index)] = True
+    elif rebalance == "daily":
+        decisions[:] = True
+    events = targets.loc[decisions].reindex(price_df.index)
     if shift_weight:
-        aligned_weights = aligned_weights.shift(1).fillna(0.0)
-
-    # ------------------------------------------------------------------
-    # 매매 히스토리(trade_log) 생성 (티커별 BUY/SELL 로그)
-    # ------------------------------------------------------------------
+        events = events.shift(1)
+    marked = price_df.ffill()
+    returns = marked.pct_change(fill_method=None)
+    holdings = np.zeros(len(price_df.columns))
+    cash = float(initial_capital)
+    equity_values = []
     trade_rows = []
-    if not aligned_weights.empty:
-        prev_w = aligned_weights.iloc[0]
-        dates = aligned_weights.index
-
-        for i in range(1, len(aligned_weights)):
-            curr_w = aligned_weights.iloc[i]
-
-            # 각 티커별 weight 차이
-            diff = curr_w - prev_w
-            changed = diff[diff.abs() > 1e-9]  # 사실상 0 아닌 것만
-
-            if not changed.empty:
-                for ticker, d in changed.items():
-                    old = float(prev_w[ticker])
-                    new = float(curr_w[ticker])
-                    delta = float(d)
-
-                    action = "BUY" if delta > 0 else "SELL"
-
-                    trade_rows.append(
-                        {
-                            "date": dates[i],
-                            "ticker": ticker,
-                            "old_w": old,
-                            "new_w": new,
-                            "delta": delta,
-                            "action": action,
-                        }
-                    )
-
-                prev_w = curr_w
-
-    if trade_rows:
-        trade_log_df = pd.DataFrame(trade_rows).set_index("date")
-    else:
-        trade_log_df = pd.DataFrame(
-            columns=["ticker", "old_w", "new_w", "delta", "action"]
-        )
-        trade_log_df.index.name = "date"
-
-    # 4) 포트 일간 수익률
-    daily_port_ret = (aligned_weights * daily_ret_assets).sum(axis=1)
-
-    # 5) 포트 가치 시계열 (명목 equity)
-    equity_curve = (1.0 + daily_port_ret).cumprod() * initial_capital
+    pending_target = None
+    deferred_days = 0
+    for i, date in enumerate(price_df.index):
+        r = returns.iloc[i].to_numpy()
+        if i and np.any((holdings > 1e-9) & ~np.isfinite(r)):
+            raise ValueError(f"Missing held-asset return at {date.date()}")
+        holdings *= 1 + np.nan_to_num(r, nan=0.0)
+        nav = float(holdings.sum() + cash)
+        event = events.iloc[i]
+        if event.notna().all():
+            # The latest executable signal supersedes an older pending order.
+            pending_target = event
+        if pending_target is not None:
+            target = pending_target
+            desired = nav * target.to_numpy()
+            delta = desired - holdings
+            raw = price_df.iloc[i].to_numpy()
+            traded = np.abs(delta) > max(nav * 1e-10, 1e-9)
+            if np.any(traded & (~np.isfinite(raw) | (raw <= 0))):
+                invalid = traded & (~np.isfinite(raw) | (raw <= 0))
+                tickers = ', '.join(price_df.columns[invalid])
+                if missing_execution == 'defer':
+                    deferred_days += 1
+                    if deferred_days <= 5:
+                        print(f'[INFO] Rebalance deferred at {date.date()}: missing price for {tickers}.')
+                    equity_values.append(nav)
+                    continue
+                raise ValueError(f"Cannot execute with missing/invalid price at {date.date()}: {tickers}")
+            for j in np.flatnonzero(traded):
+                trade_rows.append(dict(
+                    date=date, ticker=price_df.columns[j],
+                    old_w=holdings[j]/nav, new_w=desired[j]/nav,
+                    delta=delta[j]/nav, amount=delta[j],
+                    action="BUY" if delta[j] > 0 else "SELL",
+                    execution="close"))
+            holdings = desired
+            cash = nav - float(holdings.sum())
+            pending_target = None
+        equity_values.append(nav)
+    if deferred_days:
+        print(f'[INFO] Rebalances deferred on {deferred_days} days due to unavailable execution prices.')
+    if pending_target is not None:
+        print('[INFO] Final rebalance remains pending; no fill was assumed.')
+    equity_curve = pd.Series(equity_values, index=price_df.index)
+    daily_port_ret = equity_curve.pct_change().fillna(0.0)
+    trade_log_df = pd.DataFrame(trade_rows, columns=[
+        "date", "ticker", "old_w", "new_w", "delta", "amount", "action", "execution"
+    ]).set_index("date")
 
     # 6) 성과 지표 계산
     cagr = _calc_cagr(equity_curve)          # Nominal CAGR
@@ -236,7 +294,7 @@ def run_backtest(
     sharpe = _calc_sharpe(daily_port_ret)
 
     # 7) Real CAGR (CPI 기준 인플레 차감)
-    real_cagr = _calc_real_cagr(equity_curve)
+    real_cagr = _calc_real_cagr(equity_curve) if calculate_real_cagr else None
 
     return BacktestResult(
         equity_curve=equity_curve,
@@ -247,6 +305,51 @@ def run_backtest(
         trade_log=trade_log_df,
         real_cagr=real_cagr,
     )
+
+
+def _run_separate_sleeves(prices, weights, capital, shift, real_cagr,
+                          missing_execution, asset, fraction, cash_ticker):
+    """Independent signal-only asset/cash capital and monthly core capital.
+
+    No capital transfers between sleeves, even while the signal sleeve is in
+    cash. Thus a sale and later re-entry use the whole sleeve's current value,
+    not a fresh 25% of total NAV. The core rebalances its own remaining capital.
+    """
+    if not 0 < fraction < 1 or asset == cash_ticker:
+        raise ValueError('Invalid signal-only sleeve configuration.')
+    if asset not in weights or cash_ticker not in weights:
+        raise ValueError('Signal-only asset and cash must be present in weights.')
+    allocation = weights[asset]
+    if not (np.isclose(allocation, 0) | np.isclose(allocation, fraction)).all():
+        raise ValueError('Signal-only sleeve requires binary on/off target weights.')
+    signal_weights = pd.DataFrame({asset: allocation / fraction,
+                                   cash_ticker: 1 - allocation / fraction}, index=weights.index)
+    core_weights = weights.drop(columns=asset).copy()
+    core_weights[cash_ticker] -= fraction - allocation
+    if (core_weights[cash_ticker] < -1e-9).any():
+        raise ValueError('Cash target does not cover the inactive signal sleeve.')
+    core_weights[cash_ticker] = core_weights[cash_ticker].clip(lower=0)
+    core_weights /= 1 - fraction
+    common = dict(shift_weight=shift, calculate_real_cagr=False,
+                  missing_execution=missing_execution)
+    signal = run_backtest(prices[[asset, cash_ticker]], signal_weights,
+                          initial_capital=capital * fraction, rebalance='changes', **common)
+    core = run_backtest(prices.drop(columns=asset), core_weights,
+                        initial_capital=capital * (1-fraction), rebalance='monthly', **common)
+    equity = signal.equity_curve + core.equity_curve
+    returns = equity.pct_change().fillna(0.)
+    logs = []
+    for label, result in [('signal', signal), ('monthly_core', core)]:
+        log = result.trade_log.copy()
+        scale = (result.equity_curve / equity).reindex(log.index).to_numpy()
+        for col in ['old_w', 'new_w', 'delta']:
+            log[col] *= scale
+        log['sleeve'] = label
+        logs.append(log)
+    trades = pd.concat(logs).sort_index(kind='stable')
+    return BacktestResult(equity, returns, _calc_cagr(equity), _calc_mdd(equity),
+                          _calc_sharpe(returns), trades,
+                          _calc_real_cagr(equity) if real_cagr else None)
 
 
 # ----------------------------------------------------------------------

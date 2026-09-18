@@ -2,6 +2,7 @@
 
 from typing import Dict
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 from strategies.adjDualMomentum import dual_momentum_signal
 
@@ -66,7 +67,7 @@ def _laa_dm_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     prices = prices.sort_index()
     cols = list(prices.columns)
 
-    monthly_idx = prices.resample("M").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []

@@ -22,6 +22,7 @@ LAA2 전략 (LAA + IWD 동시 리스크온/오프)
 from typing import Dict, Optional
 
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 from utils.macro_data import load_unemployment_rate
 from strategies.laa import _is_recession, _is_market_uptrend
@@ -125,7 +126,7 @@ def _laa2_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     cols = list(prices.columns)
 
     # 월말 인덱스 (마지막 영업일 기준)
-    monthly_idx = prices.resample("ME").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     # 실업률 전체 시계열
     unrate_full = load_unemployment_rate().dropna()

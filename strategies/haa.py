@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Dict, List
 import numpy as np
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 from io import StringIO
 import urllib.request
 
@@ -270,7 +271,7 @@ def _haa_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
         tips_yield_mom_df['DFII10'] = np.nan
 
     # --- 3. 월말에 루프를 돌며 가중치 생성 ---
-    monthly_idx = prices.resample("ME").last().index.intersection(mom_scores_df.index)
+    monthly_idx = completed_month_ends(prices.index).intersection(mom_scores_df.index)
 
     rows = []
     idxs = []

@@ -17,6 +17,7 @@ LAA_MA3 전략 (LAA_MA2F에서 IWD 로직 변경)
 from __future__ import annotations
 from typing import Dict
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 from utils.data_loader import load_close_for_ma
 from utils.macro_data import load_unemployment_rate
@@ -44,7 +45,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("LAA_MA3 전략에는 'SPY' 가격 데이터가 필요합니다.")
 
     unrate_full = load_unemployment_rate().dropna()
-    monthly_idx = prices.resample("ME").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []
@@ -69,7 +70,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     else:
         regime_m = pd.DataFrame(rows, index=pd.DatetimeIndex(idxs))
 
-    regime_d = regime_m.reindex(prices.index).ffill()
+    regime_d = regime_m.astype('boolean').reindex(prices.index).ffill()
     regime_d["recession"] = regime_d["recession"].fillna(False)
     regime_d["uptrend"] = regime_d["uptrend"].fillna(True)
 
@@ -155,7 +156,7 @@ def _laa_ma3_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     
     spy = prices["SPY"].dropna()
     spy_ma200 = spy.rolling(200).mean()
-    spy_uptrend = (spy > spy_ma200).reindex(idx).ffill().fillna(True)
+    spy_uptrend = (spy > spy_ma200).astype('boolean').reindex(idx).ffill().fillna(True)
 
     # IWD 매도 조건: 불경기 & 3일 연속 하락장
     is_downtrend_3_days = (spy_uptrend == False).rolling(3).sum() >= 3

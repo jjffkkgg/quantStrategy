@@ -24,6 +24,7 @@ LAA_MA2 전략
 from typing import Dict
 
 import pandas as pd
+from utils.trading_calendar import completed_month_ends
 
 from utils.data_loader import load_close_for_ma
 from utils.macro_data import load_unemployment_rate
@@ -54,7 +55,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
     unrate_full = load_unemployment_rate().dropna()
 
     # 월말 인덱스 (마지막 영업일 기준)
-    monthly_idx = prices.resample("ME").last().index
+    monthly_idx = completed_month_ends(prices.index)
 
     rows = []
     idxs = []
@@ -86,7 +87,7 @@ def _compute_regime_flags(prices: pd.DataFrame) -> pd.DataFrame:
         regime_m = pd.DataFrame(rows, index=pd.DatetimeIndex(idxs))
 
     # 일별 인덱스로 맞추고 ffill
-    regime_d = regime_m.reindex(prices.index).ffill()
+    regime_d = regime_m.astype('boolean').reindex(prices.index).ffill()
 
     # NaN 이 남아있으면 기본값 설정:
     #   recession: False (불경기 아님)
