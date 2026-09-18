@@ -30,7 +30,10 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 
-from utils.backtest import run_backtest
+from utils.backtest import run_backtest, defer_pre_history_allocations
+from utils.bond_proxy import treasury_total_return
+from utils.trading_calendar import completed_month_ends
+import pandas_market_calendars as mcal
 from utils.data_loader import load_prices
 from utils.data_loader import load_close_for_ma
 from utils.macro_data import load_unemployment_rate
@@ -46,6 +49,7 @@ from strategies.dm_rp import get_weights as dm_rp_get_weights
 from strategies.laaMA3 import get_weights as laa_ma3_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
 from strategies.laaMA4 import get_weights as laa_ma4_get_weights
+from strategies.laaMA4_gold12 import get_weights as laa_ma4_gold12_get_weights
 from strategies.haa import get_weights as haa_get_weights
 from strategies.laaMA_sandbox import get_weights as laa_ma_sandbox_get_weights
 
@@ -98,7 +102,7 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
     if name == "LAA_MA3":
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
-    if name == "LAA_MA4":
+    if name in ("LAA_MA4", "LAA_MA4_GOLD12"):
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
     if name == "DM_RP":
@@ -289,7 +293,7 @@ def build_dm_weights_timeseries(price_df: pd.DataFrame) -> pd.DataFrame:
     price_df = price_df.sort_index()
     cols = list(price_df.columns)
 
-    monthly_idx = price_df.resample("ME").last().index
+    monthly_idx = completed_month_ends(price_df.index)
 
     weights_list: List[Dict[str, float]] = []
     idx_list: List[pd.Timestamp] = []
@@ -383,6 +387,8 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     
     if name == "LAA_MA4":
         return laa_ma4_get_weights(price_df)
+    if name == "LAA_MA4_GOLD12":
+        return laa_ma4_gold12_get_weights(price_df)
     
     if name == "DM_RP":
         return dm_rp_get_weights(price_df)
@@ -414,6 +420,7 @@ def main():
         print("       python runBacktest.py MA2")
         print("       python runBacktest.py LAA_MA3")
         print("       python runBacktest.py LAA_MA4")
+        print("       python runBacktest.py LAA_MA4_GOLD12")
         print("       python runBacktest.py HAA")
         print("       python runBacktest.py LAA_SANDBOX")
         sys.exit(1)
@@ -469,7 +476,8 @@ def main():
             # 프록시 티커의 해당 시점 값
             proxy_value_at_start = price_df.loc[first_valid_target_idx, proxy_ticker]
 
-            if pd.isna(target_value_at_start) or pd.isna(proxy_value_at_start) or proxy_value_at_start == 0:
+            if (pd.isna(target_value_at_start) or pd.isna(proxy_value_at_start)
+                    or (proxy_value_at_start == 0 and target_ticker not in ("IEF", "TLT", "BIL"))):
                 print(f"[WARNING] '{target_ticker}' 또는 '{proxy_ticker}'의 시작점 데이터가 유효하지 않아 프록시 채우기를 건너킵니다.")
                 continue
 
@@ -485,14 +493,23 @@ def main():
 
             synthetic_series_part = pd.Series(np.nan, index=price_df.index)
 
-            if target_ticker in ("IEF", "TLT", "BIL"): # 가격-대-금리 프록시 (역비례 관계)
-                # P_IEF_t = P_IEF_start * (Y_TNX_start / Y_TNX_t)
-                # 프록시 시리즈(금리)에 0 값이 없는지 확인
-                if (proxy_series.loc[missing_period_mask] == 0).any():
-                    print(f"[WARNING] '{proxy_ticker}' (YIELD)에 0 값이 있어 '{target_ticker}' 프록시 채우기를 건너킵니다.")
-                    continue
-                synthetic_series_part.loc[missing_period_mask] = target_value_at_start * (proxy_value_at_start / proxy_series.loc[missing_period_mask])
-                print(f"[INFO] '{target_ticker}'의 초기 누락 데이터를 '{proxy_ticker}'의 역비례 관계로 스케일링하여 채웁니다.")
+            # Only extend pre-inception history; do not fill later data outages.
+            missing_period_mask &= price_df.index < first_valid_target_idx
+            if target_ticker in ("IEF", "TLT", "BIL"):
+                if target_ticker == "BIL":
+                    rates = proxy_series.ffill() / 100.0
+                    elapsed = rates.index.to_series().diff().dt.days / 365.25
+                    model = (1 + rates.shift(1) * elapsed).fillna(1.0).cumprod()
+                else:
+                    maturity = {"IEF": 8.5, "TLT": 25.0}[target_ticker]
+                    model = treasury_total_return(proxy_series, maturity)
+                anchor = model.loc[first_valid_target_idx]
+                if pd.isna(anchor) or anchor <= 0:
+                    raise ValueError(f"Invalid bond proxy anchor for {target_ticker}")
+                synthetic_series_part.loc[missing_period_mask] = (
+                    model.loc[missing_period_mask] / anchor * target_value_at_start
+                )
+                print(f"[INFO] {target_ticker}: modeled Treasury total-return prehistory (carry + repricing).")
             else:
                 # 가격-대-가격 프록시 (정비례 관계)
                 scaling_factor = target_value_at_start / proxy_value_at_start
@@ -514,24 +531,39 @@ def main():
         raise ValueError("load_prices 결과의 index가 DatetimeIndex가 아닙니다.")
 
     price_df = price_df.sort_index()
+    # ETF execution calendar: futures-only holidays must not count as equity days.
+    sessions = mcal.get_calendar('NYSE').schedule(
+        start_date=price_df.index.min(), end_date=price_df.index.max()).index
+    price_df = price_df.reindex(price_df.index.intersection(sessions))
     print(f"[INFO] 가격 기간: {price_df.index[0].date()} ~ {price_df.index[-1].date()}")
 
     # 3) 전략별 weight 시계열 생성
     print("[INFO] 전략 weight 시계열 생성 중...")
-    weight_df = get_strategy_weights(strategy_name, price_df)
-
     # 최종 price_df에서 전략에 필요한 티커만 남기고, 추가 다운로드된 프록시 티커는 제거
     price_df = price_df[list(tickers)]
+    weight_df = get_strategy_weights(strategy_name, price_df)
+
+    weight_df = defer_pre_history_allocations(price_df, weight_df)
 
     print(f"[INFO] 리밸런싱/적용 기간: {weight_df.index[0].date()} ~ {weight_df.index[-1].date()}")
 
     # 4) 백테스트 실행
     print("[INFO] 백테스트 실행 중...")
+    sleeve_options = {}
+    if strategy_name in ('LAA_MA4', 'LAA_MA4_GOLD12'):
+        sleeve_options = dict(signal_only_asset='QQQ', signal_only_weight=0.25)
+    elif strategy_name == 'LAA_SANDBOX':
+        from strategies import laaMA_sandbox as sandbox
+        sleeve_options = dict(signal_only_asset=sandbox.TICKER_AGGRESSIVE,
+                              signal_only_weight=sandbox.W_AGGRESSIVE,
+                              cash_ticker=sandbox.TICKER_CASH)
     result = run_backtest(
         price_df=price_df,
         weight_df=weight_df,
         initial_capital=1_000_000.0,
-        shift_weight=True,  # 룩어헤드 방지
+        shift_weight=True,  # 신호 확정 다음 거래일 종가 체결
+        missing_execution='defer',
+        **sleeve_options,
     )
 
     print("\n=== 최근 20개 매매 내역 (Most Recent 20 Trades) ===")
