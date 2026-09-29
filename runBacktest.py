@@ -24,6 +24,7 @@
 """
 
 import os
+import json
 import sys
 from typing import Dict, List
 
@@ -49,7 +50,6 @@ from strategies.dm_rp import get_weights as dm_rp_get_weights
 from strategies.laaMA3 import get_weights as laa_ma3_get_weights
 from strategies.laaMA2F import get_weights as laa_ma2f_get_weights
 from strategies.laaMA4 import get_weights as laa_ma4_get_weights
-from strategies.laaMA4_gold12 import get_weights as laa_ma4_gold12_get_weights
 from strategies.haa import get_weights as haa_get_weights
 from strategies.laaMA_sandbox import get_weights as laa_ma_sandbox_get_weights
 
@@ -102,7 +102,7 @@ def get_tickers_for_strategy(strategy_name: str) -> List[str]:
     if name == "LAA_MA3":
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
-    if name in ("LAA_MA4", "LAA_MA4_GOLD12"):
+    if name == "LAA_MA4":
         return ["QQQ", "IEF", "IWD", "IAU", "SGOV", "SPY"]
     
     if name == "DM_RP":
@@ -387,8 +387,6 @@ def get_strategy_weights(strategy_name: str, price_df: pd.DataFrame) -> pd.DataF
     
     if name == "LAA_MA4":
         return laa_ma4_get_weights(price_df)
-    if name == "LAA_MA4_GOLD12":
-        return laa_ma4_gold12_get_weights(price_df)
     
     if name == "DM_RP":
         return dm_rp_get_weights(price_df)
@@ -420,7 +418,6 @@ def main():
         print("       python runBacktest.py MA2")
         print("       python runBacktest.py LAA_MA3")
         print("       python runBacktest.py LAA_MA4")
-        print("       python runBacktest.py LAA_MA4_GOLD12")
         print("       python runBacktest.py HAA")
         print("       python runBacktest.py LAA_SANDBOX")
         sys.exit(1)
@@ -550,10 +547,11 @@ def main():
     # 4) 백테스트 실행
     print("[INFO] 백테스트 실행 중...")
     sleeve_options = {}
-    if strategy_name in ('LAA_MA4', 'LAA_MA4_GOLD12'):
+    if strategy_name == 'LAA_MA4':
         sleeve_options = dict(signal_only_asset='QQQ', signal_only_weight=0.25)
     elif strategy_name == 'LAA_SANDBOX':
         from strategies import laaMA_sandbox as sandbox
+        print('[INFO] Sandbox settings: ' + json.dumps(sandbox.get_experiment_config(), ensure_ascii=False))
         sleeve_options = dict(signal_only_asset=sandbox.TICKER_AGGRESSIVE,
                               signal_only_weight=sandbox.W_AGGRESSIVE,
                               cash_ticker=sandbox.TICKER_CASH)
@@ -574,6 +572,9 @@ def main():
 
     os.makedirs("outputs", exist_ok=True)
     result.trade_log.to_csv(f"outputs/trades_{strategy_name}.csv")
+    if strategy_name == 'LAA_SANDBOX':
+        with open('outputs/config_LAA_SANDBOX.json', 'w', encoding='utf-8') as config_file:
+            json.dump(sandbox.get_experiment_config(), config_file, ensure_ascii=False, indent=2)
 
     print("\n=== Backtest Result ===")
     print(f"Strategy : {strategy_name}")

@@ -23,7 +23,6 @@ from strategies.ma2 import ma2_signal
 from strategies.laaMA2F import laa_ma2f_signal
 from strategies.laaMA3 import laa_ma3_signal
 from strategies.laaMA4 import laa_ma4_signal
-from strategies.laaMA4_gold12 import laa_ma4_gold12_signal
 from strategies.dm_rp import dm_rp_signal
 from strategies.haa import haa_signal
 from strategies.laaMA_sandbox import laa_sandbox_signal
@@ -173,11 +172,6 @@ def main():
     print_weight_result("LAA_MA2_F", laa_ma2_f)
     print_weight_result("LAA_MA3", laa_ma3)
     print_weight_result("LAA_MA4", laa_ma4)
-    try:
-        gold12 = laa_ma4_gold12_signal(prices, verbose=True)
-    except Exception as e:
-        gold12 = f"Error: {e}"
-    print_weight_result("LAA_MA4_GOLD12", gold12)
     print_weight_result("DM_RP", dm_rp)
     print_weight_result("HAA", haa)
     print_weight_result("LAA_SANDBOX", laa_sandbox)

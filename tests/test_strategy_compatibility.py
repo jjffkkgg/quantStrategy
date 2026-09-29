@@ -16,14 +16,14 @@ from utils.backtest import defer_pre_history_allocations, run_backtest
 
 class StrategyCompatibilityTests(unittest.TestCase):
     SIGNAL_NAMES = {'LAA', 'DM', 'LAA_DM', 'LAA_MA', 'LAA_MA2', 'MA2',
-                    'LAA_MA2_F', 'LAA_MA3', 'LAA_MA4', 'LAA_MA4_GOLD12',
+                    'LAA_MA2_F', 'LAA_MA3', 'LAA_MA4',
                     'DM_RP', 'HAA', 'LAA_SANDBOX'}
     @classmethod
     def setUpClass(cls):
         cls.index = mcal.get_calendar('NYSE').schedule('2019-01-01', '2021-08-05').index
         cls.names = ['LAA', 'LAA2', 'SP500_MA', 'SP500', 'SP500MA', 'DM',
                      'LAA_DM', 'LAA_MA', 'MA2', 'LAA_MA2', 'LAA_MA2F',
-                     'LAA_MA3', 'LAA_MA4', 'LAA_MA4_GOLD12', 'DM_RP', 'HAA', 'LAA_SANDBOX']
+                     'LAA_MA3', 'LAA_MA4', 'DM_RP', 'HAA', 'LAA_SANDBOX']
         tickers = sorted({t for name in cls.names for t in runner.get_tickers_for_strategy(name)})
         cls.prices = pd.DataFrame({t: np.linspace(100., 150. + i, len(cls.index))
                                    for i, t in enumerate(tickers)}, index=cls.index)
@@ -60,6 +60,9 @@ class StrategyCompatibilityTests(unittest.TestCase):
                 stack.enter_context(patch.object(runner.os, 'makedirs'))
                 stack.enter_context(patch.object(pd.DataFrame, 'to_csv'))
                 stack.enter_context(patch.object(pd.Series, 'to_csv'))
+                if name == 'LAA_SANDBOX':
+                    from unittest.mock import mock_open
+                    stack.enter_context(patch('builtins.open', mock_open()))
                 stack.enter_context(patch('utils.backtest._calc_real_cagr', return_value=np.nan))
                 results = []
 
@@ -75,7 +78,7 @@ class StrategyCompatibilityTests(unittest.TestCase):
                 self.assertGreater(result.equity_curve.iloc[-1], result.equity_curve.iloc[0])
                 self.assertFalse(result.trade_log.empty)
                 self.assertNotIn(pd.Timestamp('2020-02-03'), result.trade_log.index)
-                self.assertEqual('sleeve' in result.trade_log, name in ('LAA_MA4', 'LAA_MA4_GOLD12', 'LAA_SANDBOX'))
+                self.assertEqual('sleeve' in result.trade_log, name in ('LAA_MA4', 'LAA_SANDBOX'))
 
     def test_signal_cli_runs_all_existing_strategies(self):
         output = io.StringIO()
@@ -101,14 +104,14 @@ class StrategyCompatibilityTests(unittest.TestCase):
         with ExitStack() as stack, redirect_stdout(io.StringIO()):
             self.mock_sources(stack, self.prices)
             stack.enter_context(patch.object(signal_runner, 'load_prices', return_value=self.prices.copy()))
-            stack.enter_context(patch.object(signal_runner, 'laa_ma4_gold12_signal',
+            stack.enter_context(patch.object(signal_runner, 'laa_sandbox_signal',
                                              side_effect=RuntimeError('test-only variant failure')))
             displayed = stack.enter_context(patch.object(signal_runner, 'print_weight_result'))
             signal_runner.main()
         results = {call.args[0]: call.args[1] for call in displayed.call_args_list}
         self.assertEqual(set(results), self.SIGNAL_NAMES)
-        self.assertIn('test-only variant failure', results['LAA_MA4_GOLD12'])
-        for name in self.SIGNAL_NAMES - {'LAA_MA4_GOLD12'}:
+        self.assertIn('test-only variant failure', results['LAA_SANDBOX'])
+        for name in self.SIGNAL_NAMES - {'LAA_SANDBOX'}:
             self.assertIsInstance(results[name], dict, msg=f'{name}: {results[name]}')
 
     def test_sparse_weekend_targets_enter_after_first_observed_price(self):

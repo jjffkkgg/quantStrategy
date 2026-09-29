@@ -46,9 +46,16 @@ AGGRESSIVE_COOLDOWN_DAYS = 0  # 재진입 쿨다운 (0이면 비활성화)
 TICKER_GOLD_REF_BOND = "IEF" # 금 투자 판단시 참고할 채권 ETF
 GOLD_LOOKBACK_YEARS = 1 # 1년 수익률
 LOOKBACK_1Y = 252 * GOLD_LOOKBACK_YEARS
+GOLD_STRATEGY: Literal['AND', 'GOLD_ONLY', 'SPLIT', 'HOLD', 'BOTH_NEGATIVE'] = 'BOTH_NEGATIVE'
+# BOTH_NEGATIVE: sell only when both 1Y returns are strictly negative.
+# Zero is not a loss. Stay in cash until both return observations are available.
+# AND: both positive; GOLD_ONLY: gold positive; SPLIT: independent allocations.
+GOLD_PRICE_SHARE = 0.5  # SPLIT: gold momentum share; bond momentum gets 1 - share
 
 # 5. 가치 자산 (VALUE) 전략 설정
 VALUE_STRATEGY: Literal['REGIME', 'MA', 'HOLD'] = 'REGIME' # 'REGIME', 'MA', 또는 'HOLD'
+VALUE_STAGED_DEFENSE = True  # REGIME only: False restores the original on/off rule
+VALUE_CAUTION_FRACTION = 0.5  # downtrend without recession: fraction of VALUE slot
 # 'REGIME': LAA와 동일한 (실업률 > 12M SMA) and (SPY < 200D MA) 로직 사용
 # 'MA'    : AGGRESSIVE와 유사한 MA 정배열/역배열 로직 (아래 설정 적용)
 # 'HOLD'  : 항상 보유 (전략 끄기)
@@ -61,6 +68,13 @@ VALUE_COOLDOWN_DAYS = 0
 # ----------------------------------------------------------------------
 # 내부 로직 (수정 불필요)
 # ----------------------------------------------------------------------
+
+
+def get_experiment_config() -> dict:
+    """Serializable settings saved with each sandbox backtest."""
+    prefixes = ('TICKER_', 'W_', 'AGGRESSIVE_', 'GOLD_', 'VALUE_')
+    return {name: value for name, value in globals().items()
+            if name.startswith(prefixes) and name.isupper()}
 
 def _ma_alignment_weights_configurable(price: pd.Series, periods: List[int]) -> pd.Series:
     """
@@ -197,6 +211,10 @@ def _apply_reentry_cooldown_mask(qqq_on: pd.Series, cooldown_days: int) -> pd.Se
 def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     prices = prices.sort_index()
     idx = prices.index
+    if GOLD_STRATEGY not in {'AND', 'GOLD_ONLY', 'SPLIT', 'HOLD', 'BOTH_NEGATIVE'}:
+        raise ValueError(f'Unknown GOLD_STRATEGY: {GOLD_STRATEGY}')
+    if not 0 <= GOLD_PRICE_SHARE <= 1 or not 0 <= VALUE_CAUTION_FRACTION <= 1:
+        raise ValueError('Gold share and value caution fraction must be between 0 and 1.')
 
     all_tickers = list(set([
         TICKER_AGGRESSIVE, TICKER_VALUE, TICKER_GOLD, TICKER_BOND,
@@ -231,6 +249,9 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
         rec = regime["recession"]
         up = regime["uptrend"]
         value_on = ~(rec & (~up))
+        value_fraction = value_on.astype(float)
+        if VALUE_STAGED_DEFENSE:
+            value_fraction.loc[(~up) & (~rec)] = VALUE_CAUTION_FRACTION
     elif VALUE_STRATEGY == 'MA':
         # MA 정배열/역배열 기반 ON/OFF
         value_close = load_close_for_ma(TICKER_VALUE, start=start_str)
@@ -245,9 +266,11 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
         w_value_daily = w_value_signal.reindex(idx, method='ffill').ffill().fillna(0.0)
         value_on_raw = (w_value_daily >= 0.5)
         value_on = _apply_reentry_cooldown_mask(value_on_raw, cooldown_days=VALUE_COOLDOWN_DAYS)
+        value_fraction = value_on.astype(float)
     elif VALUE_STRATEGY == 'HOLD':
         # 항상 보유 (전략 끄기)
         value_on = pd.Series(True, index=idx)
+        value_fraction = value_on.astype(float)
     else:
         raise ValueError(f"지원하지 않는 VALUE_STRATEGY 입니다: {VALUE_STRATEGY}")
 
@@ -255,10 +278,24 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     ret_gold_1y = prices[TICKER_GOLD].pct_change(LOOKBACK_1Y, fill_method=None)
     ret_ref_bond_1y = prices[TICKER_GOLD_REF_BOND].pct_change(LOOKBACK_1Y, fill_method=None)
 
-    gold_on_signal = (ret_gold_1y > 0) & (ret_ref_bond_1y > 0)
-    gold_on_monthly = _completed_month_end_signal(gold_on_signal, idx)
+    def monthly_flag(signal):
+        monthly = _completed_month_end_signal(signal, idx)
+        return monthly.astype('boolean').reindex(idx).ffill().fillna(False).astype(float)
 
-    gold_on = gold_on_monthly.astype('boolean').reindex(idx).ffill().fillna(False).astype(bool)
+    gold_flag = monthly_flag(ret_gold_1y > 0)
+    bond_flag = monthly_flag(ret_ref_bond_1y > 0)
+    if GOLD_STRATEGY == 'AND':
+        gold_fraction = gold_flag * bond_flag
+    elif GOLD_STRATEGY == 'GOLD_ONLY':
+        gold_fraction = gold_flag
+    elif GOLD_STRATEGY == 'SPLIT':
+        gold_fraction = GOLD_PRICE_SHARE * gold_flag + (1 - GOLD_PRICE_SHARE) * bond_flag
+    elif GOLD_STRATEGY == 'BOTH_NEGATIVE':
+        available = ret_gold_1y.notna() & ret_ref_bond_1y.notna()
+        both_negative = (ret_gold_1y < 0) & (ret_ref_bond_1y < 0)
+        gold_fraction = monthly_flag(available & ~both_negative)
+    else:
+        gold_fraction = pd.Series(1., index=idx)
 
     # 4. weight DataFrame 구성
     weight_df = pd.DataFrame(0.0, index=idx, columns=prices.columns)
@@ -268,11 +305,11 @@ def _laa_sandbox_weights_timeseries(prices: pd.DataFrame) -> pd.DataFrame:
     weight_df.loc[aggressive_on, TICKER_AGGRESSIVE] = W_AGGRESSIVE
     weight_df.loc[~aggressive_on, TICKER_CASH] += W_AGGRESSIVE
 
-    weight_df.loc[value_on, TICKER_VALUE] = W_VALUE
-    weight_df.loc[~value_on, TICKER_CASH] += W_VALUE
+    weight_df[TICKER_VALUE] = W_VALUE * value_fraction
+    weight_df[TICKER_CASH] += W_VALUE * (1 - value_fraction)
 
-    weight_df.loc[gold_on, TICKER_GOLD] = W_GOLD
-    weight_df.loc[~gold_on, TICKER_CASH] += W_GOLD
+    weight_df[TICKER_GOLD] = W_GOLD * gold_fraction
+    weight_df[TICKER_CASH] += W_GOLD * (1 - gold_fraction)
 
     weight_df = weight_df.fillna(0.0)
     return weight_df
@@ -297,9 +334,11 @@ def laa_sandbox_signal(prices: pd.DataFrame, verbose: bool = False) -> Dict[str,
         print("--- Config ---")
         print(f"  Aggressive: {TICKER_AGGRESSIVE} ({W_AGGRESSIVE*100:.1f}%) | MA({AGGRESSIVE_TIMEFRAME}, cd={AGGRESSIVE_COOLDOWN_DAYS})")
         print(f"  Value     : {TICKER_VALUE} ({W_VALUE*100:.1f}%) | Strategy: {VALUE_STRATEGY}")
+        print(f"    Staged defense: {VALUE_STAGED_DEFENSE}, caution fraction: {VALUE_CAUTION_FRACTION}")
         if VALUE_STRATEGY == 'MA':
             print(f"    └ MA Config: {VALUE_MA_TIMEFRAME}, periods={VALUE_MA_PERIODS}, cd={VALUE_COOLDOWN_DAYS}")
         print(f"  Gold      : {TICKER_GOLD} ({W_GOLD*100:.1f}%) | 1Y Ret vs {TICKER_GOLD_REF_BOND}")
+        print(f"    Strategy: {GOLD_STRATEGY}, gold condition share: {GOLD_PRICE_SHARE}")
         print(f"  Bond      : {TICKER_BOND} ({W_BOND*100:.1f}%) | Fixed")
         print(f"  Cash      : {TICKER_CASH}")
         print("--- Final Weights ---")
